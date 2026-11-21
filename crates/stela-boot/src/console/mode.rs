@@ -148,7 +148,28 @@ fn choose(handle: Handle, gop: &mut GraphicsOutput) {
     }
     let current = firmware.map_or(u32::MAX, |index| index as u32);
     let firmware = firmware.map(|index| listed[index]);
-    let Some((choice, reason)) = display::choose(&candidates, current, native) else {
+    // A Renoir APU's six CUs run macOS 27's glass desktop at about 12 fps at
+    // 1080p: the wallpaper's blur chain takes ~310 ms of GPU time a frame,
+    // the GPU falls seconds behind, and the frames in flight fill its share
+    // of RAM. The guest is given 1280x720, which this panel's output lists,
+    // until the desktop stops asking for those blurs; macOS can raise it in
+    // Displays, and this cap comes out with the line below.
+    const GUEST_MODE: (u32, u32) = (1280, 720);
+    let guest_native = match native {
+        Some((width, height))
+            if u64::from(width) * u64::from(height)
+                > u64::from(GUEST_MODE.0) * u64::from(GUEST_MODE.1) =>
+        {
+            output::arguments(format_args!(
+                "DISPLAY the guest is capped at {}x{} where the panel's {width}x{height} runs \
+                 the output\n",
+                GUEST_MODE.0, GUEST_MODE.1
+            ));
+            Some(GUEST_MODE)
+        }
+        other => other,
+    };
+    let Some((choice, reason)) = display::choose(&candidates, current, guest_native) else {
         output::arguments(format_args!(
             "DISPLAY keeps the firmware's mode: no listed mode is drawable and fits the guest\n"
         ));
