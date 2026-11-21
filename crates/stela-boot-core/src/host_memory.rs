@@ -47,10 +47,18 @@ const HEAP_SHARE: u64 = 8;
 /// when NAK compiled Core Animation's generic shader 8 hours in: defined
 /// at that window, the target would leave such a session 33 MiB.
 const HEAP_TARGET: u64 = 4 * GIB;
-/// The guest DRAM [`HEAP_TARGET`] leaves at least: twice [`GUEST_FLOOR`].
-/// A guest under it keeps the heap's share or floor, so 8 GiB hosts boot
-/// with what they had.
-const GUEST_ROOM: u64 = 2 * GUEST_FLOOR;
+/// The guest DRAM [`HEAP_TARGET`] leaves at least: 4 GiB, above
+/// [`GUEST_FLOOR`]'s 3 GiB. A guest under it keeps the heap's share or
+/// floor, so 8 GiB hosts boot with what they had. An integrated GPU's
+/// larger share and Stela's long-session heap need the difference: at
+/// 6144 MiB the heap was 1878 MiB and ran out after 16 minutes, and at
+/// 5120 MiB a 16 GiB host's own 3044 MiB base heap filled as the
+/// compositor's share grew, and LLVM's translator stopped with "LLVM is
+/// out of memory" 25 minutes into Setup Assistant. 4 GiB keeps the
+/// share's 4696 MiB and gives Stela's base the 4068 MiB the target asks
+/// for at this host, while the guest stays above the 3.1 GiB a desktop
+/// reaches.
+const GUEST_ROOM: u64 = 4 * GIB;
 /// Heap bytes per byte of the board's code window: the shared block records,
 /// successors, recovery rows, index and lookup of the blocks it holds,
 /// once for the board since the block store is shared. An 8-PE 26A434
@@ -122,9 +130,14 @@ const PACK_MARGIN: u64 = 16 * MIB;
 /// Windows let such a GPU map up to half of RAM, and macOS on Apple silicon
 /// about two thirds, but those are limits on memory the system takes back
 /// under pressure; here the share is held from the guest for the boot, so
-/// it is a sixth: 2.6 GiB on a 16 GB PC, 5.2 GiB on a 32 GB PC, and the
-/// floor's 2.5 GiB below about 15 GiB free.
-const GPU_SHARE: u64 = 6;
+/// it is a third: 4.7 GiB on a 16 GB PC, 8 GiB on a 32 GB PC, and the
+/// floor's 2.5 GiB below about 8 GiB free. RADV splits the share past the
+/// carve-out two thirds to a device-local heap and a third to a host heap;
+/// on a Renoir APU a 2.5 GiB share gave a 1877 MiB local heap, which macOS
+/// 27's 4K HDR wallpaper and desktop filled, and an 18 MiB screen texture
+/// then failed. A third's 4.7 GiB gives that heap 3.5 GiB, which holds the
+/// work deferred behind the compositor's command buffers too.
+const GPU_SHARE: u64 = 3;
 /// The share a macOS desktop needs. A 16 GiB VM's AMD integrated GPU (512
 /// MiB carve-out, 3272 MiB of GTT) held 2058 MiB of RADV's heaps after a
 /// sign-in and seven app launches, the guest holding 1326 MiB (`driver

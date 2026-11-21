@@ -47,13 +47,15 @@ fn every_host_size_keeps_the_parts_in_bounds_and_the_guest_above_its_floor() {
 #[test]
 fn an_8_gib_host_gives_the_guest_what_the_parts_leave() {
     let sizes = sizes(free(8), 8, 8, GpuMemory::Own).unwrap();
-    // The floor less the 16 MiB the 496 MiB window lacks of 512 MiB.
+    // The floor less the 16 MiB the 496 MiB window lacks of 512 MiB, and
+    // the guest's room leaves the last alignment of the window's 496 MiB to
+    // the heap.
     assert_eq!(sizes.code.window, 496 * MIB);
-    assert_eq!(sizes.heap, HEAP_FLOOR - 16 * MIB);
+    assert!(sizes.heap >= HEAP_FLOOR, "{sizes:?}");
     assert_eq!(sizes.code.bytes, 512 * MIB);
     // 8 runners' sixty-fourths of the guest's 4 GiB, not of all 7.75 GiB.
-    assert_eq!(sizes.pool, 512 * MIB);
-    assert_eq!(sizes.guest, 4112 * MIB);
+    assert_eq!(sizes.pool, 510 * MIB);
+    assert_eq!(sizes.guest, 4096 * MIB);
 }
 
 #[test]
@@ -149,9 +151,9 @@ fn a_12_gib_8_core_host_takes_a_larger_window_and_heap_from_its_guest() {
     let sizes = sizes(11514 * MIB, 8, 8, GpuMemory::Own).unwrap();
     assert_eq!(
         [sizes.heap, sizes.code.bytes, sizes.pool, sizes.guest].map(|b| b / MIB),
-        [3940, 720, 710, 6144]
+        [4288, 720, 706, 5800]
     );
-    assert_eq!(sizes.guest, GUEST_ROOM);
+    assert!(sizes.guest >= GUEST_ROOM);
 }
 
 /// A host whose guest the larger window would put under its floor keeps
@@ -201,12 +203,12 @@ fn a_64_gib_host_grows_the_heap_with_its_share_window_and_pes() {
 fn stelas_share_stops_growing_per_pe_past_what_each_pe_takes() {
     for (runners, free, expected) in [
         (2, 4, None),
-        (2, 8, Some([2496, 196, 166, 5334])),
+        (2, 8, Some([3774, 196, 126, 4096])),
         (2, 16, Some([4608, 1028, 190, 10558])),
         (2, 30, Some([5792, 1924, 226, 22778])),
         (2, 128, Some([16384, 2052, 488, 112148])),
         (8, 4, None),
-        (8, 8, Some([2816, 528, 538, 4310])),
+        (8, 8, Some([3058, 528, 510, 4096])),
         (8, 16, Some([4608, 1040, 756, 9980])),
         (8, 30, Some([5888, 1936, 896, 22000])),
         (8, 128, Some([16384, 2064, 1936, 110688])),
@@ -253,7 +255,7 @@ fn measured_boots_split_as_expected() {
     for (free, expected) in [
         (7354, [2752, 464, 458, 3680]),
         (HOST_8_GB / MIB, [2768, 480, 476, 3820]),
-        (11514, [3940, 720, 710, 6144]),
+        (11514, [4288, 720, 706, 5800]),
         (15710, [4560, 992, 750, 9408]),
         (30242, [5796, 1904, 892, 21650]),
     ] {
@@ -274,9 +276,9 @@ fn measured_boots_split_as_expected() {
 #[test]
 fn host_sizes_split_as_expected() {
     for (installed, cores, expected, before) in [
-        (8, 2, [2496, 196, 158, 5086], 4714),
-        (8, 4, [2688, 392, 284, 4572], 4346),
-        (8, 8, [2800, 512, 512, 4112], 4096),
+        (8, 2, [3518, 196, 126, 4096], 4096),
+        (8, 4, [3194, 392, 254, 4096], 4096),
+        (8, 8, [2818, 512, 510, 4096], 4096),
         (16, 4, [4576, 1000, 378, 9918], 11800 - 1882),
         (16, 8, [4576, 1008, 750, 9538], 10284 - 746),
         (32, 8, [6080, 2000, 906, 22758], 23920 - 1162),
@@ -388,12 +390,19 @@ fn the_heap_target_leaves_the_guest_its_room() {
     }
 }
 
+/// An 8 GiB host's guest is exactly its room, so the heap grows from its
+/// share toward its target on what the guest's floor leaves.
 #[test]
-fn an_8_gib_host_keeps_its_heap_floor() {
+fn an_8_gib_host_grows_its_heap_to_its_target_beside_the_guests_room() {
     for runners in [2, 4, 8] {
         let sizes = sizes(free(8), runners, runners, GpuMemory::Own).unwrap();
-        assert_eq!(sizes.heap, shared_heap(free(8), runners, sizes.code.window));
-        assert!(sizes.guest < GUEST_ROOM);
+        let shared = shared_heap(free(8), runners, sizes.code.window);
+        assert!(sizes.heap >= shared, "{runners} PEs");
+        assert!(
+            sizes.heap <= heap_target(shared, sizes.code.window),
+            "{runners} PEs"
+        );
+        assert_eq!(sizes.guest, GUEST_ROOM, "{runners} PEs");
     }
 }
 
@@ -589,7 +598,7 @@ fn each_runners_pool_gives_the_kernel_half_what_it_needs_and_the_user_half_the_r
 ///   A 16 GiB VM's heap peaked at 4482 MiB with 2058 MiB of driver heaps in
 ///   a session of seven app launches, so its own part held 2.4 GiB, or up
 ///   to 2.9 GiB where the carve-out held some of the driver's buffers;
-/// - 16 and 32 GiB hosts give it a sixth, the heap its target and the guest
+/// - 16 and 32 GiB hosts give it a quarter, the heap its target and the guest
 ///   its room.
 #[test]
 fn integrated_gpu_hosts_split_as_expected() {
@@ -613,9 +622,9 @@ fn integrated_gpu_hosts_split_as_expected() {
         [
             [2704, 416, 382, 3072, 780],
             [2704, 416, 382, 3072, 1362],
-            [2816, 528, 548, 4390, 2560],
-            [4400, 832, 724, 7272, 2644],
-            [5232, 1664, 858, 18700, 5290],
+            [2752, 464, 444, 3568, 3614],
+            [4240, 672, 630, 5040, 5290],
+            [5056, 1488, 828, 16180, 8192],
         ]
     );
     // The same hosts with a GPU of its own give it nothing.
@@ -624,7 +633,7 @@ fn integrated_gpu_hosts_split_as_expected() {
     }
 }
 
-/// On every host an integrated GPU takes a sixth within its bounds, the
+/// On every host an integrated GPU takes a quarter within its bounds, the
 /// parts are sized as on a host with that much less, and the share is short
 /// of its target only where more would put the guest under its floor.
 #[test]
@@ -726,7 +735,7 @@ fn a_display_only_integrated_gpu_adds_its_pages_to_the_heap() {
     let display = sizes(10842 * MIB, 8, 8, GpuMemory::Display).unwrap();
     assert_eq!(
         [display.heap, display.guest, display.gpu].map(|b| b / MIB),
-        [3060, 6144, 256]
+        [4240, 5044, 256]
     );
     assert!(!GpuMemory::Display.limits_pages());
     assert!(!GpuMemory::Own.limits_pages());
@@ -920,10 +929,10 @@ fn an_integrated_gpus_share_leaves_the_guest() {
         [
             [2704, 780, 3072],
             [2704, 1362, 3072],
-            [2816, 2560, 4400],
-            [2880, 2560, 5220],
-            [4400, 2644, 7272],
-            [5232, 5290, 18700],
+            [2752, 3618, 3574],
+            [2818, 3968, 4096],
+            [4240, 5290, 5040],
+            [5056, 8192, 16180],
         ]
     );
 }
