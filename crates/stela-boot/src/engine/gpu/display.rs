@@ -101,6 +101,58 @@ struct KmsScanout {
     /// The counter at the display's last vertical blank as the last look
     /// read it, when it could ([`Display::last_vblank_ns`]).
     vblank_tsc: Option<u64>,
+    /// Frames presented so far, the fingerprints of the last [`HISTORY`],
+    /// and the rows and row count of the latest.
+    presents: u32,
+    history: [u64; HISTORY],
+    last_rows: Range<usize>,
+    last_written: u32,
+}
+
+/// Frames whose fingerprints the boot log keeps, and how many presents a
+/// summary line covers.
+const HISTORY: usize = 16;
+const FRAMES_PER_SUMMARY: u32 = 128;
+
+/// A word-wise fingerprint of the rows a frame writes: equal frames give
+/// equal values, and a row that differs changes one.
+fn fingerprint(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for chunk in bytes.chunks(8) {
+        let mut word = [0u8; 8];
+        word[..chunk.len()].copy_from_slice(chunk);
+        hash = (hash ^ u64::from_le_bytes(word))
+            .rotate_left(7)
+            .wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    }
+    hash
+}
+
+impl KmsScanout {
+    /// Keeps a presented frame's fingerprint and, every
+    /// [`FRAMES_PER_SUMMARY`] presents, leaves the last [`HISTORY`] in the
+    /// boot log: a screen alternating between two frames while the guest
+    /// draws nothing shows as a pair of values repeating on one line.
+    fn note_frame(&mut self, rows: Range<usize>, written: u32, hash: u64) {
+        self.presents = self.presents.saturating_add(1);
+        self.history[(self.presents as usize) % HISTORY] = hash;
+        self.last_rows = rows;
+        self.last_written = written;
+        if !self.presents.is_multiple_of(FRAMES_PER_SUMMARY) {
+            return;
+        }
+        let mut line = format!(
+            "DISPLAY FRAMES {} rows {}-{} wrote {} hashes",
+            self.presents, self.last_rows.start, self.last_rows.end, self.last_written
+        );
+        for index in 1..=HISTORY {
+            let slot = (self.presents as usize + index) % HISTORY;
+            let hash = self.history[slot];
+            line.push_str(&format!(" {:04x}", (hash ^ (hash >> 32)) as u16));
+        }
+        line.push('\n');
+        output::arguments(format_args!("{line}"));
+    }
 }
 
 impl Scanout for KmsScanout {
@@ -122,16 +174,26 @@ impl Scanout for KmsScanout {
 
     fn present(&mut self, rows: &[u8]) -> Result<()> {
         self.presented = true;
-        let Some((_, display)) = &mut self.display else {
-            // Shown nowhere: a display taken later asks every row of the
-            // next frame, its buffers holding none.
-            self.look();
-            return Ok(());
+        let height = rows.len() / (self.mode.width as usize * 4).max(1);
+        let hash = fingerprint(rows);
+        let presented = {
+            let Some((_, display)) = &mut self.display else {
+                // Shown nowhere: a display taken later asks every row of the
+                // next frame, its buffers holding none.
+                self.look();
+                return Ok(());
+            };
+            console::release();
+            let presented = display.present(rows);
+            self.blank &= presented.is_err();
+            finish_present(display, presented)
         };
-        console::release();
-        let presented = display.present(rows);
-        self.blank &= presented.is_err();
-        finish_present(display, presented)
+        self.note_frame(
+            0..height,
+            u32::try_from(rows.len() / 4).unwrap_or(u32::MAX),
+            hash,
+        );
+        presented
     }
 
     /// Without a display a frame is taken whole and shown nowhere, its rows
@@ -142,15 +204,30 @@ impl Scanout for KmsScanout {
         fill: &mut dyn FnMut(usize, &mut [u8]) -> Result<()>,
     ) -> Result<bool> {
         self.presented = true;
-        let Some((_, display)) = &mut self.display else {
-            self.look();
-            return Ok(true);
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        let mut written = 0u32;
+        let mut fingerprinted = |y: usize, row: &mut [u8]| -> Result<()> {
+            let filled = fill(y, row);
+            if filled.is_ok() {
+                hash = (hash ^ fingerprint(row))
+                    .rotate_left(7)
+                    .wrapping_mul(0x9e37_79b9_7f4a_7c15);
+                written += 1;
+            }
+            filled
         };
-        let prepared = display.prepare_rows(damage, fill)?;
-        console::release();
-        let presented = prepared.present();
-        self.blank &= presented.is_err();
-        finish_present(display, presented)?;
+        {
+            let Some((_, display)) = &mut self.display else {
+                self.look();
+                return Ok(true);
+            };
+            let prepared = display.prepare_rows(damage.clone(), &mut fingerprinted)?;
+            console::release();
+            let presented = prepared.present();
+            self.blank &= presented.is_err();
+            finish_present(display, presented)?;
+        }
+        self.note_frame(damage.unwrap_or(0..0), written, hash);
         Ok(true)
     }
 
@@ -248,6 +325,10 @@ impl KmsScanout {
             tsc_hz,
             reported: false,
             vblank_tsc: None,
+            presents: 0,
+            history: [0; HISTORY],
+            last_rows: 0..0,
+            last_written: 0,
         }
     }
 
