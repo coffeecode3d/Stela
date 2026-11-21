@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: coffeecode <kevinreyesart@gmail.com>
+Date: Sat, 21 Nov 2026 02:19:31 +0000
+Subject: [PATCH] fix(amdgpu): force the performance level high for the guest's
+ desktop, where an APU's governor left the clocks low between the bursts a
+ macOS compositor sends and a Renoir's six CUs took about 100 ms a frame at
+ 1280x720 that the high level runs in tens, saying the GFX clock the SMU
+ reports right after so a boot shows the level took
+
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_device.c | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+index 3b4293e6fe7440a0700b097300f066275e602e41..41cb96bbd1f3d7cf140a05f2084cfd8c08decee7 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+@@ -4353,6 +4353,26 @@ fence_driver_init:
+ 	 */
+ 	r = amdgpu_device_sys_interface_init(adev);
+ 
++	/*
++	 * Stela: the guest is a macOS desktop, whose compositor's GPU work
++	 * arrives in bursts between waits; an APU's governor leaves its clocks
++	 * low for those bursts, and a Renoir's six CUs then take about 100 ms
++	 * for a frame they would run in tens at the high level. The guest is
++	 * the only user of this GPU, so the level is forced high for the
++	 * session rather than left to the power heuristic.
++	 */
++	if (adev->pm.dpm_enabled) {
++		int forced = amdgpu_dpm_force_performance_level(
++			adev, AMD_DPM_FORCED_LEVEL_HIGH);
++		uint32_t clock = 0, size = sizeof(clock);
++		int read = amdgpu_dpm_read_sensor(
++			adev, AMDGPU_PP_SENSOR_GFX_SCLK, &clock, &size);
++
++		dev_info(adev->dev,
++			 "Stela: the GPU performance level is forced high (%d), GFX clock %u MHz (%d)\n",
++			 forced, clock, read);
++	}
++
+ 	if (IS_ENABLED(CONFIG_PERF_EVENTS))
+ 		r = amdgpu_pmu_init(adev);
+ 	if (r)
