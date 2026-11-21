@@ -581,6 +581,22 @@ are rough.
    keep the pack's appends to idle service time (`--profile`'s
    `idle_service` already exists). That is an upstream-shaped change.
 
+## Where this work went (2026-11-21)
+
+- Upstream draft PR: https://github.com/tylertms/Stela/pull/270, from
+  `coffeecode3d/Stela:renoir/host-fixes` onto `gpu/amd` -- the display
+  swap gate and the kept-halves skip only (68 insertions, 8 deletions).
+- Everything else, with this document, on `renoir/vega6` in the same fork.
+- Backup outside the working tree: `~/Backups/stela-renoir-2026-11-21/`
+  and `/run/media/infinitek/Asuka/Backups/stela-renoir-2026-11-21/` (the
+  repo tarball with `.git` and the submodule repositories, the branch
+  bundle, the built `.efi` and `stela` CLI, all 23 boots' logs, the
+  stick's EFI config, the reverted Plan 1 patch, and a README with the
+  restore steps).
+- The boot stick was wiped for Ventoy after its log and config were
+  copied; the 24 GiB macOS installer on it is gone, so making a Stela
+  stick again needs that installer (nothing is cached locally).
+
 ## Plan 2 (deferred): the block lookup in `fetch`
 
 `fetch` is 13-14% of a busy PE at ~3.5 us per engine exit, and the
