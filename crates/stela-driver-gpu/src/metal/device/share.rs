@@ -26,8 +26,16 @@
 use core::sync::atomic::{AtomicPtr, Ordering};
 
 /// Bytes of driver memory each byte the guest holds costs, as a fraction:
-/// 1.25, above the 1.07 to 1.22 measured.
-pub const GROWTH: (u64, u64) = (5, 4);
+/// 1.05. A 12 GB host's heaps measured 1.22 for each byte the guest held
+/// (1763M for 1045M), which refused a screen-sized RGBA16F surface when the
+/// guest held 2249M of a 3526M share though Linux held 2001M; 1.25 refused
+/// one too. A Renoir APU's share then measured less: on a 4696M share the
+/// guest's 2755M had Linux holding 3119M, a slope of 0.95, and at the
+/// third refusal (guest 3190M, Linux 3120M) the 1.22 model named 4397M of
+/// pages: 1.3G more than Linux held, so it refused a 16M screen texture
+/// with a third of the share unused. 1.05 keeps 10% over that slope for
+/// Linux's own pages and the work a refusal leaves in flight.
+pub const GROWTH: (u64, u64) = (21, 20);
 
 /// What the platform says of an integrated GPU's share now.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -146,13 +154,13 @@ mod tests {
             limit: 2560 * MIB,
         };
         assert_eq!(margin(state.limit), 160 * MIB);
-        assert_eq!(working_set(state), 1536 * MIB);
+        assert_eq!(working_set(state), 1920 * MIB * 20 / 21);
         // A small share keeps its 64 MiB margin; a full one tells nothing.
         let small = ShareState {
             held: 200 * MIB,
             limit: 512 * MIB,
         };
-        assert_eq!(working_set(small), 198 * MIB + MIB * 2 / 5);
+        assert_eq!(working_set(small), 248 * MIB * 20 / 21);
         let full = ShareState {
             held: 2560 * MIB,
             limit: 2560 * MIB,
@@ -169,17 +177,17 @@ mod tests {
         };
         let now = |held| ShareState { held, limit };
         // The run that filled its GTT held 1045M, which a whole share
-        // backs; at 1300M the growth passes it, with Linux's pages not yet
+        // backs; at 1400M the growth passes it, with Linux's pages not yet
         // all taken.
         assert!(!refuses(now(1400 * MIB), base, 1045 * MIB, 4 * MIB));
-        assert!(refuses(now(1400 * MIB), base, 1300 * MIB, 4 * MIB));
+        assert!(refuses(now(1400 * MIB), base, 1400 * MIB, 4 * MIB));
         // Early, with room, an allocation is made.
         assert!(!refuses(now(600 * MIB), base, 300 * MIB, 64 * MIB));
         // Linux's own count decides when it is past the growth: pages the
         // guest freed but the driver kept, or Linux's own.
         assert!(refuses(now(1950 * MIB), base, 100 * MIB, MIB));
         // A request too large for what is left is refused at once.
-        assert!(refuses(now(600 * MIB), base, 300 * MIB, 1024 * MIB));
+        assert!(refuses(now(600 * MIB), base, 300 * MIB, 1200 * MIB));
         // The device holding less than at its base takes the base's pages.
         assert!(!refuses(now(0), base, 0, MIB));
     }

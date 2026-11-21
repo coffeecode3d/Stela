@@ -3753,14 +3753,14 @@ fn a_device_on_a_share_refuses_what_the_share_would_not_hold() {
     let mut device = device_on(MockBackend::new());
     device.share_memory(state);
     // 1024M less a 64M margin and Linux's 400M leave 560M, which holds
-    // 448M of the guest's at 1.25 bytes each: seven 64M textures.
+    // 512M of the guest's at 1.05 bytes each: eight 64M textures.
     let large = TextureDescriptor {
         width: 4096,
         height: 4096,
         ..texture(PixelFormat::Rgba8Unorm, TextureUsage::SHADER_READ)
     };
     let mut textures = Vec::new();
-    for _ in 0..7 {
+    for _ in 0..8 {
         textures.push(device.new_texture(&large).unwrap());
     }
     assert_eq!(device.new_texture(&large), Err(Error::OutOfMemory));
