@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: coffeecode <kevinreyesart@gmail.com>
+Date: Fri, 20 Nov 2026 16:26:15 +0000
+Subject: [PATCH] radv: split an APU's visible VRAM share seven eighths to one
+ eighth GTT
+
+Stela budgets a macOS guest's integrated GPU as a share of the host's
+RAM, and every texture of its desktop (WindowServer's layers and the
+wallpaper's blur chains) is DEVICE_LOCAL. With the upstream 2/3 and 1/3
+split a 4696M share gave the device-local heap 3301M, which a Renoir
+APU's WindowServer filled to 3818M, refusing a 102x80 RGBA16F image,
+while the GTT heap held 276M of its 1650M. Seven eighths gives the
+device-local heap 4332M and keeps 587M of GTT for imported guest pages.
+---
+ src/amd/vulkan/radv_physical_device.c | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/src/amd/vulkan/radv_physical_device.c b/src/amd/vulkan/radv_physical_device.c
+index dbaa1f650569e62788573f57263cd89ca076aa14..685ee49c916818a366acfb352afd0b8b9fddd845 100644
+--- a/src/amd/vulkan/radv_physical_device.c
++++ b/src/amd/vulkan/radv_physical_device.c
+@@ -487,9 +487,13 @@ radv_physical_device_init_mem_types(struct radv_physical_device *pdev)
+       } else {
+          /* On APUs, the carveout is usually too small for games that request a minimum VRAM size
+           * greater than it. To workaround this, we compute the total available memory size (GTT +
+-          * visible VRAM size) and report 2/3 as VRAM and 1/3 as GTT.
++          * visible VRAM size) and report 7/8 as VRAM and 1/8 as GTT. Stela gives the GPU most of
++          * this host's RAM and every texture of a macOS desktop (WindowServer's layers, the
++          * wallpaper's blur chains) is DEVICE_LOCAL, so the upstream 2/3, which took a third of
++          * 4696M for a GTT heap that held 276M, ran the device-local heap out while it still had
++          * a third of the share to itself. The GTT heap still keeps 587M for imported guest pages.
+           */
+-         visible_vram_size = align64((total_size * 2) / 3, pdev->info.gart_page_size);
++         visible_vram_size = align64((total_size * 7) / 8, pdev->info.gart_page_size);
+          gtt_size = total_size - visible_vram_size;
+       }
+ 
+@@ -3300,11 +3304,11 @@ radv_get_memory_budget_properties(VkPhysicalDevice physicalDevice,
+          /* Compute the remaining visible VRAM size for this process. */
+          uint64_t vram_vis_free_space = vram_vis_heap_size - MIN2(vram_vis_heap_size, vram_vis_internal_usage);
+ 
+-         /* Distribute the total free space (2/3rd as VRAM and 1/3rd as GTT) to match the heap
++         /* Distribute the total free space (7/8th as VRAM and 1/8th as GTT) to match the heap
+           * sizes, and align down to the page size to be conservative.
+           */
+          vram_vis_free_space =
+-            ROUND_DOWN_TO(MIN2((total_free_space * 2) / 3, vram_vis_free_space), pdev->info.gart_page_size);
++            ROUND_DOWN_TO(MIN2((total_free_space * 7) / 8, vram_vis_free_space), pdev->info.gart_page_size);
+          uint64_t gtt_free_space = total_free_space - vram_vis_free_space;
+ 
+          memoryBudget->heapBudget[vram_vis_heap_idx] = vram_vis_free_space + vram_vis_internal_usage;
